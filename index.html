@@ -150,4 +150,248 @@
           <tr>
             <th>Date</th>
             <th>Photo</th>
-            <th>Customer
+            <th>Customer</th>
+            <th>Device</th>
+            <th>IMEI</th>
+            <th>Issue</th>
+            <th>Cost</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="ticketTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Firebase SDKs Script -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+  import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+  import { getFirestore, collection, addDoc, onSnapshot, updateDoc, deleteDoc, doc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCIm5Nt8yq2ipPD3vgy9wnlo9ansxu2IK0",
+    authDomain: "mobile-repair-41323.firebaseapp.com",
+    projectId: "mobile-repair-41323",
+    storageBucket: "mobile-repair-41323.firebasestorage.app",
+    messagingSenderId: "171333872265",
+    appId: "1:171333872265:web:7697447f571bdd0052f458"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  const authOverlay = document.getElementById('authOverlay');
+  const loginForm = document.getElementById('loginForm');
+  const loginError = document.getElementById('loginError');
+  const appContent = document.getElementById('appContent');
+  const logoutBtn = document.getElementById('logoutBtn');
+
+  const form = document.getElementById('repairForm');
+  const submitBtn = document.getElementById('submitBtn');
+  const ticketTableBody = document.getElementById('ticketTableBody');
+  const searchInput = document.getElementById('searchInput');
+  const shopNameInput = document.getElementById('shopNameInput');
+  const toggleCostBtn = document.getElementById('toggleCostBtn');
+
+  let allTickets = [];
+  let showCost = false;
+  let unsubscribeStore = null;
+
+  // Monitor Auth State
+  onAuthStateChanged(auth, (user) => {
+    if (user) {
+      authOverlay.classList.add('hidden');
+      appContent.classList.remove('hidden');
+      initDatabaseListener();
+    } else {
+      authOverlay.classList.remove('hidden');
+      appContent.classList.add('hidden');
+      if (unsubscribeStore) unsubscribeStore();
+    }
+  });
+
+  // Login Submission
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    loginError.textContent = '';
+    const email = document.getElementById('loginEmail').value;
+    const pass = document.getElementById('loginPassword').value;
+
+    try {
+      await signInWithEmailAndPassword(auth, email, pass);
+      loginForm.reset();
+    } catch (err) {
+      console.error("Firebase Auth Error:", err);
+      loginError.textContent = err.message || 'Invalid email or password.';
+    }
+  });
+
+  // Logout
+  logoutBtn.addEventListener('click', () => signOut(auth));
+
+  // Load Saved Shop Name
+  shopNameInput.value = localStorage.getItem('shop_name') || 'iLa Repair Portal';
+  shopNameInput.addEventListener('input', (e) => {
+    localStorage.setItem('shop_name', e.target.value);
+  });
+
+  // Toggle Cost Visibility
+  toggleCostBtn.addEventListener('click', () => {
+    showCost = !showCost;
+    toggleCostBtn.textContent = showCost ? '👁️ Hide Costs' : '👁️ Show Costs';
+    renderTickets(searchInput.value);
+  });
+
+  // Process Image File to Base64
+  const processImage = (file) => {
+    return new Promise((resolve) => {
+      if (!file) return resolve('');
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const maxDim = 800;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > maxDim) { height *= maxDim / width; width = maxDim; }
+          } else {
+            if (height > maxDim) { width *= maxDim / height; height = maxDim; }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.7));
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Save Repair Record
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving Repair Record...';
+
+    try {
+      const imageFile = document.getElementById('deviceImage').files[0];
+      const imageUrl = imageFile ? await processImage(imageFile) : '';
+
+      const now = new Date();
+      const formattedDate = now.toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+
+      await addDoc(collection(db, "repairs"), {
+        customerName: document.getElementById('customerName').value,
+        phoneNumber: document.getElementById('phoneNumber').value,
+        deviceModel: document.getElementById('deviceModel').value,
+        imei: document.getElementById('imei').value || 'N/A',
+        issue: document.getElementById('issue').value,
+        cost: parseFloat(document.getElementById('cost').value || 0),
+        status: document.getElementById('status').value,
+        imageUrl: imageUrl,
+        dateAdded: formattedDate,
+        createdAt: now.toISOString()
+      });
+
+      form.reset();
+    } catch (err) {
+      alert('Error saving record: ' + err.message);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Save Repair Record';
+    }
+  });
+
+  // Real-time Database Listener
+  function initDatabaseListener() {
+    const q = query(collection(db, "repairs"), orderBy("createdAt", "desc"));
+    unsubscribeStore = onSnapshot(q, (snapshot) => {
+      allTickets = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      renderTickets(searchInput.value);
+    });
+  }
+
+  // Render Table
+  function renderTickets(filterText = '') {
+    ticketTableBody.innerHTML = '';
+    const qText = filterText.toLowerCase();
+
+    const filtered = allTickets.filter(t => 
+      (t.customerName && t.customerName.toLowerCase().includes(qText)) ||
+      (t.phoneNumber && t.phoneNumber.toLowerCase().includes(qText)) ||
+      (t.deviceModel && t.deviceModel.toLowerCase().includes(qText)) ||
+      (t.imei && t.imei.toLowerCase().includes(qText)) ||
+      (t.issue && t.issue.toLowerCase().includes(qText)) ||
+      (t.dateAdded && t.dateAdded.toLowerCase().includes(qText))
+    );
+
+    if (filtered.length === 0) {
+      ticketTableBody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:#64748b;">No repair tickets found.</td></tr>';
+      return;
+    }
+
+    filtered.forEach(t => {
+      const row = document.createElement('tr');
+      const displayCost = showCost ? `$${(t.cost || 0).toFixed(2)}` : '••••';
+
+      row.innerHTML = `
+        <td><small style="color:#94a3b8; font-weight:500;">${t.dateAdded || 'N/A'}</small></td>
+        <td>${t.imageUrl ? `<a href="${t.imageUrl}" target="_blank"><img src="${t.imageUrl}" class="device-img" title="Click to view full photo"></a>` : '<span style="color:#64748b;">No Photo</span>'}</td>
+        <td><strong style="color:#f8fafc;">${escapeHtml(t.customerName)}</strong><br><small style="color:#94a3b8">${escapeHtml(t.phoneNumber)}</small></td>
+        <td>${escapeHtml(t.deviceModel)}</td>
+        <td><code style="color:#38bdf8;">${escapeHtml(t.imei || 'N/A')}</code></td>
+        <td>${escapeHtml(t.issue)}</td>
+        <td class="cost-text">${displayCost}</td>
+        <td>
+          <select class="status-select" data-id="${t.id}">
+            <option value="Received" ${t.status === 'Received' ? 'selected' : ''}>Received</option>
+            <option value="In Progress" ${t.status === 'In Progress' ? 'selected' : ''}>In Progress</option>
+            <option value="Completed" ${t.status === 'Completed' ? 'selected' : ''}>Completed</option>
+            <option value="Delivered" ${t.status === 'Delivered' ? 'selected' : ''}>Delivered</option>
+          </select>
+        </td>
+        <td><button class="delete-btn" data-delete="${t.id}">Delete</button></td>
+      `;
+      ticketTableBody.appendChild(row);
+    });
+  }
+
+  // Handle Status Update & Deletion
+  ticketTableBody.addEventListener('change', async (e) => {
+    if (e.target.classList.contains('status-select')) {
+      const docId = e.target.dataset.id;
+      await updateDoc(doc(db, "repairs", docId), { status: e.target.value });
+    }
+  });
+
+  ticketTableBody.addEventListener('click', async (e) => {
+    if (e.target.dataset.delete) {
+      if (confirm('Delete this repair history record?')) {
+        await deleteDoc(doc(db, "repairs", e.target.dataset.delete));
+      }
+    }
+  });
+
+  searchInput.addEventListener('input', (e) => renderTickets(e.target.value));
+
+  function escapeHtml(str) {
+    return (str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+</script>
+</body>
+</html>
